@@ -16,6 +16,27 @@ from .utils import suppress_flash_attn_warning
 
 logger = logging.getLogger(__name__)
 
+_MIN_TORCH_VERSION = (2, 5, 1)
+
+
+def _parse_torch_version(version_str: str) -> tuple[int, int, int]:
+    core = version_str.split("+", 1)[0]
+    parts = core.split(".")
+
+    nums = []
+    for p in parts[:3]:
+        digits = ""
+        for ch in p:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        nums.append(int(digits) if digits else 0)
+
+    while len(nums) < 3:
+        nums.append(0)
+    return nums[0], nums[1], nums[2]
+
 
 
 
@@ -70,6 +91,13 @@ class FasterQwen3TTS:
         """
         if isinstance(dtype, str):
             dtype = getattr(torch, dtype)
+
+        torch_ver = _parse_torch_version(torch.__version__)
+        if torch_ver < _MIN_TORCH_VERSION:
+            raise RuntimeError(
+                "faster-qwen3-tts requires torch>=2.5.1 for reliable CUDA graph capture. "
+                f"Detected torch {torch.__version__}."
+            )
             
         if not device.startswith("cuda") or not torch.cuda.is_available():
             raise ValueError("CUDA graphs require CUDA device")
