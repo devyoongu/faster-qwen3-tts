@@ -96,6 +96,7 @@ def measure_ttfa(url: str, text: str, voice: str, run_idx: int, play: bool = Fal
             player = None
 
     t_start = time.perf_counter()
+    t_last_byte = t_start  # 마지막 바이트 수신 시점 (RTF 계산 기준)
 
     try:
         with httpx.stream("POST", url, json=payload, timeout=60.0) as resp:
@@ -127,12 +128,13 @@ def measure_ttfa(url: str, text: str, voice: str, run_idx: int, play: bool = Fal
                         player(pcm, sample_rate)
 
                 total_bytes += len(chunk)
+                t_last_byte = now  # 마지막 수신 바이트 시간 갱신
     finally:
         if player is not None:
-            player.close(wait=True)
+            player.close(wait=True)  # 재생 완료 대기 (elapsed_s 계산과 무관)
 
-    t_end = time.perf_counter()
-    elapsed_s = t_end - t_start
+    # RTF = 서버가 오디오를 생성한 속도 (네트워크 수신 완료 기준, 재생 시간 제외)
+    elapsed_s = t_last_byte - t_start
 
     pcm_bytes = total_bytes - WAV_HEADER_SIZE
     audio_duration_s = pcm_bytes / 2 / sample_rate if pcm_bytes > 0 else 0.0
