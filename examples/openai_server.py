@@ -185,6 +185,7 @@ async def _stream_chunks(voice_cfg: dict, text: str) -> AsyncGenerator[bytes, No
                     ref_audio=voice_cfg["ref_audio"],
                     ref_text=voice_cfg.get("ref_text", ""),
                     chunk_size=voice_cfg.get("chunk_size", 12),
+                    xvec_only=voice_cfg.get("xvec_only", False),
                     non_streaming_mode=False,
                 ):
                     q.put(chunk)
