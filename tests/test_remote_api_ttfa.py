@@ -81,6 +81,11 @@ def measure_ttfa(url: str, text: str, voice: str, run_idx: int,
     total_bytes = 0
     pcm_carry = b""  # 홀수 바이트 carry (16-bit 샘플 경계 유지)
 
+    # Pre-buffer: 첫 0.5초 분량이 쌓인 후 재생 시작 → buffer underrun 방지
+    PRE_BUFFER_BYTES = sample_rate * 2 // 2  # 0.5초 = sr * 2bytes(16-bit) / 2
+    pre_buf = b""
+    started = False
+
     t_start = time.perf_counter()
     t_last_byte = t_start
 
@@ -90,11 +95,11 @@ def measure_ttfa(url: str, text: str, voice: str, run_idx: int,
         for chunk in resp.iter_bytes(chunk_size=4096):
             now = time.perf_counter()
 
-            # 첫 데이터 도착 시점 = TTFA
+            # 첫 데이터 도착 시점 = TTFA (pre-buffer와 무관하게 네트워크 기준)
             if ttfa_ms is None and len(chunk) > 0:
                 ttfa_ms = (now - t_start) * 1000
 
-            # 실시간 재생 (16-bit 샘플 경계 정렬)
+            # 실시간 재생 (16-bit 샘플 경계 정렬 + pre-buffer)
             if player is not None and len(chunk) > 0:
                 raw = pcm_carry + chunk
                 if len(raw) % 2 != 0:
@@ -103,10 +108,21 @@ def measure_ttfa(url: str, text: str, voice: str, run_idx: int,
                 else:
                     pcm_carry = b""
                 if len(raw) > 0:
-                    player(_pcm_chunk_to_float32(raw), sample_rate)
+                    if not started:
+                        pre_buf += raw
+                        if len(pre_buf) >= PRE_BUFFER_BYTES:
+                            player(_pcm_chunk_to_float32(pre_buf), sample_rate)
+                            pre_buf = b""
+                            started = True
+                    else:
+                        player(_pcm_chunk_to_float32(raw), sample_rate)
 
             total_bytes += len(chunk)
             t_last_byte = now
+
+    # pre_buf에 남은 데이터 flush (전체 오디오가 PRE_BUFFER_BYTES 미만인 경우)
+    if player is not None and pre_buf:
+        player(_pcm_chunk_to_float32(pre_buf), sample_rate)
 
     # RTF = 서버가 오디오를 생성한 속도 (네트워크 수신 완료 기준, 재생 시간 제외)
     elapsed_s = t_last_byte - t_start
@@ -165,7 +181,7 @@ def run_benchmark(host: str, port: int, sentences: list, voice: str, runs: int, 
                     import sys as _sys, os as _os
                     _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
                     from examples.audio import StreamPlayer
-                    player = StreamPlayer()
+                    player = StreamPlayer(latency='low')
                 except ImportError:
                     print("  [경고] sounddevice 미설치. 재생 생략.")
 

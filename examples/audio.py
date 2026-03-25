@@ -12,10 +12,11 @@ import numpy as np
 class StreamPlayer:
     """Play streaming audio chunks through one persistent output stream."""
 
-    def __init__(self, *, channels: int = 1, dtype: str = "float32", max_queue_chunks: int = 0):
+    def __init__(self, *, channels: int = 1, dtype: str = "float32", max_queue_chunks: int = 0, latency: str = "high"):
         self.channels = channels
         self.dtype = dtype
         self.max_queue_chunks = max_queue_chunks
+        self._latency = latency
 
         self._queue: queue.Queue[Optional[np.ndarray]] = queue.Queue(maxsize=max_queue_chunks)
         self._pending = np.zeros((0, channels), dtype=np.float32)
@@ -86,6 +87,7 @@ class StreamPlayer:
             samplerate=sample_rate,
             channels=self.channels,
             dtype=self.dtype,
+            latency=self._latency,
             callback=self._callback,
         )
         self._stream.start()
