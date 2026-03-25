@@ -21,8 +21,11 @@ import numpy as np
 
 DEFAULT_HOST = "172.31.79.202"
 DEFAULT_PORT = 8000
-# DEFAULT_TEXT = "Hello world. This is a test of the faster Qwen3 TTS server."
-DEFAULT_TEXT = "Hello world. This is a test of the faster Qwen3 TTS server."
+DEFAULT_SENTENCES = [
+    "안녕하세요. 경동나비엔 고객센터 에이아이 콜봇입니다.",
+    "보다 정확한 상담을 위해 조용한 곳에서 상담사와 이야기 하듯이 편하게 말씀해 주세요.",
+    "더 빠르게 도와 드릴 수 있습니다. 무엇을 도와 드릴까요?",
+]
 DEFAULT_VOICE = "alloy"
 DEFAULT_RUNS = 3
 
@@ -146,15 +149,17 @@ def measure_ttfa(url: str, text: str, voice: str, run_idx: int, play: bool = Fal
     }
 
 
-def run_benchmark(host: str, port: int, text: str, voice: str, runs: int, save_wav: bool, play: bool = False):
+def run_benchmark(host: str, port: int, sentences: list, voice: str, runs: int, save_wav: bool, play: bool = False):
     url = f"http://{host}:{port}/v1/audio/speech"
     print(f"\n{'='*60}")
     print(f"Remote TTS API TTFA Benchmark")
-    print(f"  URL   : {url}")
-    print(f"  Text  : {text[:60]}{'...' if len(text) > 60 else ''}")
-    print(f"  Voice : {voice}")
-    print(f"  Runs  : {runs}")
-    print(f"  Play  : {'ON' if play else 'OFF'}")
+    print(f"  URL      : {url}")
+    print(f"  Voice    : {voice}")
+    print(f"  Runs     : {runs}")
+    print(f"  Play     : {'ON' if play else 'OFF'}")
+    print(f"  Sentences: {len(sentences)}")
+    for i, s in enumerate(sentences, 1):
+        print(f"    {i}. {s}")
     print(f"{'='*60}\n")
 
     # 서버 연결 확인
@@ -168,48 +173,45 @@ def run_benchmark(host: str, port: int, text: str, voice: str, runs: int, save_w
     except Exception:
         pass  # /는 404일 수 있으나 서버는 살아있음
 
-    results = []
-    for i in range(1, runs + 1):
-        label = "재생 중" if play else "측정 중"
-        print(f"Run {i}/{runs} ({label}) ...", end=" ", flush=True)
-        try:
-            r = measure_ttfa(url, text, voice, i, play=play)
-            results.append(r)
-            print(
-                f"TTFA={r['ttfa_ms']:.1f}ms  "
-                f"Total={r['total_ms']:.0f}ms  "
-                f"Audio={r['audio_duration_s']:.2f}s  "
-                f"RTF={r['rtf']:.3f}"
-            )
-        except httpx.HTTPStatusError as e:
-            print(f"FAILED: HTTP {e.response.status_code}")
-        except Exception as e:
-            print(f"FAILED: {e}")
+    all_results = []
 
-    if not results:
-        print("\n모든 요청이 실패했습니다.")
+    for run_idx in range(1, runs + 1):
+        print(f"\n--- Run {run_idx}/{runs} ---")
+        run_results = []
+        for s_idx, sentence in enumerate(sentences, 1):
+            label = "재생 중" if play else "측정 중"
+            print(f"  [{s_idx}/{len(sentences)}] {label}: {sentence[:40]}{'...' if len(sentence) > 40 else ''}", end=" ", flush=True)
+            try:
+                r = measure_ttfa(url, sentence, voice, run_idx, play=play)
+                run_results.append(r)
+                print(f"→ TTFA={r['ttfa_ms']:.1f}ms  RTF={r['rtf']:.3f}")
+            except httpx.HTTPStatusError as e:
+                print(f"FAILED: HTTP {e.response.status_code}")
+            except Exception as e:
+                print(f"FAILED: {e}")
+        all_results.append(run_results)
+
+    # 통계: Run 1 제외 (warm-up), 문장별 평균
+    stat_runs = all_results[1:] if len(all_results) > 1 else all_results
+    if not stat_runs or not stat_runs[0]:
+        print("\n측정 결과가 없습니다.")
         return
 
-    # 첫 번째 run은 CUDA graph warm-up 포함이므로 통계에서 제외 (runs > 1일 때)
-    stat_results = results[1:] if len(results) > 1 else results
-    ttfa_values = [r["ttfa_ms"] for r in stat_results]
-    rtf_values = [r["rtf"] for r in stat_results]
-
-    avg_ttfa = sum(ttfa_values) / len(ttfa_values)
-    min_ttfa = min(ttfa_values)
-    max_ttfa = max(ttfa_values)
-    avg_rtf = sum(rtf_values) / len(rtf_values)
-
     print(f"\n{'='*60}")
-    print(f"결과 요약 (Run 1 제외, n={len(stat_results)})")
-    print(f"  TTFA : avg={avg_ttfa:.1f}ms  min={min_ttfa:.1f}ms  max={max_ttfa:.1f}ms")
-    print(f"  RTF  : avg={avg_rtf:.3f}  (>1.0 = 실시간보다 빠름)")
-    print(f"  Sample Rate: {results[0]['sample_rate']} Hz")
+    n = len(stat_runs)
+    print(f"결과 요약 (Run 1 제외, n={n}회 평균)")
+    print(f"  {'문장':<45} {'TTFA(avg)':>10} {'RTF(avg)':>10}")
+    print(f"  {'-'*45} {'-'*10} {'-'*10}")
+    for s_idx, sentence in enumerate(sentences):
+        ttfa_vals = [stat_runs[r][s_idx]["ttfa_ms"] for r in range(n) if s_idx < len(stat_runs[r])]
+        rtf_vals  = [stat_runs[r][s_idx]["rtf"]     for r in range(n) if s_idx < len(stat_runs[r])]
+        if ttfa_vals:
+            label = sentence[:43] + ".." if len(sentence) > 45 else sentence
+            print(f"  {label:<45} {sum(ttfa_vals)/len(ttfa_vals):>9.1f}ms {sum(rtf_vals)/len(rtf_vals):>10.3f}")
     print(f"{'='*60}\n")
 
-    if save_wav and results:
-        # 마지막 run의 오디오를 저장
-        _save_last_wav(url, text, voice)
+    if save_wav:
+        _save_last_wav(url, sentences[-1], voice)
 
 
 def _save_last_wav(url: str, text: str, voice: str):
@@ -231,17 +233,18 @@ def main():
     parser = argparse.ArgumentParser(description="Remote TTS API TTFA 측정")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--text", default=DEFAULT_TEXT)
+    parser.add_argument("--sentences", nargs="+", default=DEFAULT_SENTENCES, metavar="TEXT",
+                        help="재생할 문장 목록 (공백으로 구분, 기본: 한국어 3문장)")
     parser.add_argument("--voice", default=DEFAULT_VOICE)
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
-    parser.add_argument("--save-wav", action="store_true", help="마지막 결과 WAV 저장")
+    parser.add_argument("--save-wav", action="store_true", help="마지막 문장 WAV 저장")
     parser.add_argument("--no-play", action="store_true", help="오디오 재생 비활성화")
     args = parser.parse_args()
 
     run_benchmark(
         host=args.host,
         port=args.port,
-        text=args.text,
+        sentences=args.sentences,
         voice=args.voice,
         runs=args.runs,
         save_wav=args.save_wav,
