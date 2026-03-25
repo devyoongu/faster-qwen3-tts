@@ -27,7 +27,7 @@ DEFAULT_SENTENCES = [
     "더 빠르게 도와 드릴 수 있습니다. 무엇을 도와 드릴까요?",
 ]
 DEFAULT_VOICE = "alloy"
-DEFAULT_RUNS = 3
+DEFAULT_RUNS = 1
 
 
 def _parse_wav_header(data: bytes) -> Optional[int]:
@@ -63,81 +63,55 @@ def _pcm_chunk_to_float32(raw: bytes) -> np.ndarray:
     return arr
 
 
-def measure_ttfa(url: str, text: str, voice: str, run_idx: int, play: bool = False) -> dict:
+def measure_ttfa(url: str, text: str, voice: str, run_idx: int,
+                 player=None, sample_rate: int = 24000) -> dict:
     """
     단일 요청의 TTFA, 총 소요시간, RTF를 측정.
-    TTFA = 첫 번째 오디오 데이터 청크가 도착한 시점 (WAV 헤더 이후)
-    play=True 이면 수신 즉시 sounddevice로 재생.
+    PCM 포맷으로 수신 (WAV 헤더 없음 → 파싱 오류/잡음 없음).
+    player가 주어지면 수신 즉시 재생 (문장 간 동일 player 재사용으로 잡음 방지).
     """
     payload = {
         "model": "tts-1",
         "input": text,
         "voice": voice,
-        "response_format": "wav",
+        "response_format": "pcm",  # WAV 헤더 없이 순수 16-bit PCM
     }
 
     ttfa_ms: Optional[float] = None
     total_bytes = 0
-    header_buf = b""
-    sample_rate = 24000  # 기본값
-    WAV_HEADER_SIZE = 44
-
-    # 실시간 재생용 StreamPlayer (play=True일 때만 초기화)
-    player = None
-    if play:
-        try:
-            import sys
-            import os
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-            from examples.audio import StreamPlayer
-            player = StreamPlayer()
-        except ImportError:
-            print("  [경고] sounddevice 미설치. 재생 생략. (pip install sounddevice)")
-            player = None
+    pcm_carry = b""  # 홀수 바이트 carry (16-bit 샘플 경계 유지)
 
     t_start = time.perf_counter()
-    t_last_byte = t_start  # 마지막 바이트 수신 시점 (RTF 계산 기준)
+    t_last_byte = t_start
 
-    try:
-        with httpx.stream("POST", url, json=payload, timeout=60.0) as resp:
-            resp.raise_for_status()
+    with httpx.stream("POST", url, json=payload, timeout=60.0) as resp:
+        resp.raise_for_status()
 
-            for chunk in resp.iter_bytes(chunk_size=4096):
-                now = time.perf_counter()
+        for chunk in resp.iter_bytes(chunk_size=4096):
+            now = time.perf_counter()
 
-                # WAV 헤더 수집 및 파싱
-                if len(header_buf) < WAV_HEADER_SIZE:
-                    needed = WAV_HEADER_SIZE - len(header_buf)
-                    header_buf += chunk[:needed]
-                    audio_part = chunk[needed:]
-                    if len(header_buf) >= WAV_HEADER_SIZE:
-                        sr = _parse_wav_header(header_buf)
-                        if sr:
-                            sample_rate = sr
+            # 첫 데이터 도착 시점 = TTFA
+            if ttfa_ms is None and len(chunk) > 0:
+                ttfa_ms = (now - t_start) * 1000
+
+            # 실시간 재생 (16-bit 샘플 경계 정렬)
+            if player is not None and len(chunk) > 0:
+                raw = pcm_carry + chunk
+                if len(raw) % 2 != 0:
+                    pcm_carry = raw[-1:]
+                    raw = raw[:-1]
                 else:
-                    audio_part = chunk
+                    pcm_carry = b""
+                if len(raw) > 0:
+                    player(_pcm_chunk_to_float32(raw), sample_rate)
 
-                # 헤더 이후 첫 오디오 데이터 도착 시점 = TTFA
-                if ttfa_ms is None and len(header_buf) >= WAV_HEADER_SIZE and len(audio_part) > 0:
-                    ttfa_ms = (now - t_start) * 1000
-
-                # 실시간 재생
-                if player is not None and len(audio_part) > 0:
-                    pcm = _pcm_chunk_to_float32(audio_part)
-                    if len(pcm) > 0:
-                        player(pcm, sample_rate)
-
-                total_bytes += len(chunk)
-                t_last_byte = now  # 마지막 수신 바이트 시간 갱신
-    finally:
-        if player is not None:
-            player.close(wait=True)  # 재생 완료 대기 (elapsed_s 계산과 무관)
+            total_bytes += len(chunk)
+            t_last_byte = now
 
     # RTF = 서버가 오디오를 생성한 속도 (네트워크 수신 완료 기준, 재생 시간 제외)
     elapsed_s = t_last_byte - t_start
 
-    pcm_bytes = total_bytes - WAV_HEADER_SIZE
-    audio_duration_s = pcm_bytes / 2 / sample_rate if pcm_bytes > 0 else 0.0
+    audio_duration_s = total_bytes / 2 / sample_rate if total_bytes > 0 else 0.0
     rtf = audio_duration_s / elapsed_s if elapsed_s > 0 else 0.0
 
     return {
@@ -183,14 +157,31 @@ def run_benchmark(host: str, port: int, sentences: list, voice: str, runs: int, 
         for s_idx, sentence in enumerate(sentences, 1):
             label = "재생 중" if play else "측정 중"
             print(f"  [{s_idx}/{len(sentences)}] {label}: {sentence[:40]}{'...' if len(sentence) > 40 else ''}", end=" ", flush=True)
+
+            # 문장마다 새 player (PCM 포맷 + carry byte 수정으로 잡음 방지)
+            player = None
+            if play:
+                try:
+                    import sys as _sys, os as _os
+                    _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
+                    from examples.audio import StreamPlayer
+                    player = StreamPlayer()
+                except ImportError:
+                    print("  [경고] sounddevice 미설치. 재생 생략.")
+
             try:
-                r = measure_ttfa(url, sentence, voice, run_idx, play=play)
+                r = measure_ttfa(url, sentence, voice, run_idx,
+                                 player=player, sample_rate=24000)
                 run_results.append(r)
                 print(f"→ TTFA={r['ttfa_ms']:.1f}ms  RTF={r['rtf']:.3f}")
             except httpx.HTTPStatusError as e:
                 print(f"FAILED: HTTP {e.response.status_code}")
             except Exception as e:
                 print(f"FAILED: {e}")
+            finally:
+                if player is not None:
+                    player.close(wait=True)  # 재생 완료 후 다음 문장 시작
+
         all_results.append(run_results)
 
     # 통계: Run 1 제외 (warm-up), 문장별 평균
