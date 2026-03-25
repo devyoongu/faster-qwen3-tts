@@ -179,15 +179,20 @@ async def _stream_chunks(voice_cfg: dict, text: str) -> AsyncGenerator[bytes, No
     def producer():
         try:
             with _model_lock:
-                for chunk, _sr, _timing in tts_model.generate_voice_clone_streaming(
+                gen_kwargs = dict(
                     text=text,
                     language=voice_cfg.get("language", "Auto"),
-                    ref_audio=voice_cfg["ref_audio"],
-                    ref_text=voice_cfg.get("ref_text", ""),
                     chunk_size=voice_cfg.get("chunk_size", 12),
                     xvec_only=voice_cfg.get("xvec_only", False),
                     non_streaming_mode=False,
-                ):
+                )
+                if "_prompt" in voice_cfg:
+                    # Use pre-extracted speaker embedding (fast path)
+                    gen_kwargs["voice_clone_prompt"] = voice_cfg["_prompt"]
+                else:
+                    gen_kwargs["ref_audio"] = voice_cfg["ref_audio"]
+                    gen_kwargs["ref_text"] = voice_cfg.get("ref_text", "")
+                for chunk, _sr, _timing in tts_model.generate_voice_clone_streaming(**gen_kwargs):
                     q.put(chunk)
         except Exception as exc:
             q.put(exc)
@@ -348,6 +353,19 @@ def main():
     )
     SAMPLE_RATE = tts_model.sample_rate
     logger.info("Model ready. Sample rate: %d Hz", SAMPLE_RATE)
+
+    # Pre-extract speaker embeddings for all voices (once at startup)
+    for voice_name, cfg in voices.items():
+        if "ref_audio" in cfg:
+            xvec_only = cfg.get("xvec_only", False)
+            logger.info("Pre-extracting speaker embedding for voice '%s' (xvec_only=%s) …", voice_name, xvec_only)
+            cfg["_prompt"] = tts_model.model.create_voice_clone_prompt(
+                ref_audio=cfg["ref_audio"],
+                ref_text=cfg.get("ref_text", ""),
+                x_vector_only_mode=xvec_only,
+            )
+            logger.info("Speaker embedding ready for voice '%s'", voice_name)
+
     logger.info("Server listening on http://%s:%d", args.host, args.port)
 
     uvicorn.run(app, host=args.host, port=args.port)
