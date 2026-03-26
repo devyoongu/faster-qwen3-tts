@@ -12,17 +12,16 @@ import sounddevice as sd
 import time
 
 # --- 설정 구간 ---
-SERVER_IP = "172.31.79.202"
-# SERVER_IP = "172.31.88.110"
-SERVER_PORT = "8000"
-# SERVER_PORT = "8001"
+# SERVER_IP = "172.31.79.202"
+SERVER_IP = "172.31.88.110"
+# SERVER_PORT = "8000"
+SERVER_PORT = "8001"
 URL = f"http://{SERVER_IP}:{SERVER_PORT}/v1/audio/speech"
 
 SAMPLE_RATE = 24000  # 서버 출력 샘플레이트 (24kHz 고정)
 CHANNELS = 1         # 모노
 
 PAYLOAD = {
-    "model": "tts-1",
     "input": "안녕하세요. 경동나비엔 고객센터 에이아이 콜봇입니다.",
     # "input": "안녕하세요. 경동나비엔 고객센터 에이아이 콜봇입니다. 보다 정확한 상담을 위해 조용한 곳에서 상담사와 이야기 하드시 편하게 말씀해 주시면 더 빠르게 도와 드릴 수 있습니다. 무엇을 도와 드릴까요?",
     "voice": "default",
