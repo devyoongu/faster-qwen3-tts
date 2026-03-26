@@ -12,10 +12,10 @@ import sounddevice as sd
 import time
 
 # --- 설정 구간 ---
-# SERVER_IP = "172.31.79.202"
-SERVER_IP = "172.31.88.110"
-# SERVER_PORT = "8000"
-SERVER_PORT = "8001"
+SERVER_IP = "172.31.79.202"
+# SERVER_IP = "172.31.88.110"
+SERVER_PORT = "8000"
+# SERVER_PORT = "8001"
 URL = f"http://{SERVER_IP}:{SERVER_PORT}/v1/audio/speech"
 
 SAMPLE_RATE = 24000  # 서버 출력 샘플레이트 (24kHz 고정)
