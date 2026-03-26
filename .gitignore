@@ -2,7 +2,7 @@ models/
 #sample_*.wav
 #*.wav
 !ref_audio.wav
-*.json
+#*.json
 __pycache__/
 *.pyc
 .venv/
